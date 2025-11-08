@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-st.set_page_config(page_title="📈 Forecast Orders – Daily Scenarios", layout="wide")
-st.title("Prognoza dzienna Hermes ")
+st.set_page_config(page_title="📈 Forecast Orders – Advanced Daily Model", layout="wide")
+st.title("🛒 Prognoza dzienna zamówień eCommerce z zaawansowanymi średnimi kroczącymi i scenariuszami")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
@@ -39,7 +39,12 @@ data['orders'] = pd.to_numeric(data['orders'], errors='coerce').fillna(0)
 # === Agregacja dzienna ===
 ts = data.set_index('date')['orders'].resample('D').sum()
 ts_cum = ts.cumsum()
-ma = ts.rolling(ma_window, min_periods=1).mean().cumsum()
+
+# === Dane historyczne do średnich kroczących ===
+ma_short = ts.rolling(7, min_periods=1).mean().cumsum()
+ma_mid = ts.rolling(30, min_periods=1).mean().cumsum()
+ma_long = ts.rolling(90, min_periods=1).mean().cumsum()
+ema_30 = ts.ewm(span=30, adjust=False).mean().cumsum()
 
 # === Dane poprzedniego roku i wzrost YoY ===
 prev_year = ts[ts.index.year == ts.index.max().year - 1]
@@ -59,9 +64,19 @@ try:
     forecast_cum = pd.Series(np.cumsum(forecast.values) + ts_cum.iloc[-1], index=forecast.index)
     forecast_cum_opt = forecast_cum * (1 + opt_change/100)
     forecast_cum_pess = forecast_cum * (1 - opt_change/100)
+
+    # Średnie kroczące na prognozę
+    ma_short_forecast = pd.concat([ma_short, forecast_cum.rolling(7, min_periods=1).mean()]).iloc[-forecast_horizon:]
+    ma_mid_forecast = pd.concat([ma_mid, forecast_cum.rolling(30, min_periods=1).mean()]).iloc[-forecast_horizon:]
+    ma_long_forecast = pd.concat([ma_long, forecast_cum.rolling(90, min_periods=1).mean()]).iloc[-forecast_horizon:]
+    ema_30_forecast = pd.concat([ema_30, forecast_cum.ewm(span=30, adjust=False).mean()]).iloc[-forecast_horizon:]
+
 except Exception as e:
     st.error(f"Błąd przy dopasowaniu modelu: {e}")
     st.stop()
+
+# === Skumulowane dane łącznie z forecastem ===
+full_cum = pd.concat([ts_cum, forecast_cum])
 
 # === Wizualizacja ===
 fig = go.Figure()
@@ -69,9 +84,22 @@ fig.add_trace(go.Scatter(x=ts_cum.index, y=ts_cum.values, mode='lines', name='�
 fig.add_trace(go.Scatter(x=forecast_cum.index, y=forecast_cum.values, mode='lines', name='🔮 Prognoza'))
 fig.add_trace(go.Scatter(x=forecast_cum_opt.index, y=forecast_cum_opt.values, mode='lines', name='🔮 Optymistyczny'))
 fig.add_trace(go.Scatter(x=forecast_cum_pess.index, y=forecast_cum_pess.values, mode='lines', name='🔮 Pesymistyczny'))
-fig.add_trace(go.Scatter(x=ma.index, y=ma.values, mode='lines', name=f'Średnia krocząca ({ma_window})'))
 
-fig.update_layout(title="Skumulowana prognoza dzienna zamówień",
+# === Średnie kroczące historyczne + forecast (przerywane, delikatny kolor) ===
+fig.add_trace(go.Scatter(x=pd.concat([ma_short.index, forecast_cum.index]),
+                         y=pd.concat([ma_short, ma_short_forecast]),
+                         mode='lines', name='MA 7 dni', line=dict(dash='dot', color='lightblue')))
+fig.add_trace(go.Scatter(x=pd.concat([ma_mid.index, forecast_cum.index]),
+                         y=pd.concat([ma_mid, ma_mid_forecast]),
+                         mode='lines', name='MA 30 dni', line=dict(dash='dot', color='lightgreen')))
+fig.add_trace(go.Scatter(x=pd.concat([ma_long.index, forecast_cum.index]),
+                         y=pd.concat([ma_long, ma_long_forecast]),
+                         mode='lines', name='MA 90 dni', line=dict(dash='dot', color='lightcoral')))
+fig.add_trace(go.Scatter(x=pd.concat([ema_30.index, forecast_cum.index]),
+                         y=pd.concat([ema_30, ema_30_forecast]),
+                         mode='lines', name='EMA 30 dni', line=dict(dash='dot', color='orange')))
+
+fig.update_layout(title="Skumulowana prognoza dzienna zamówień z zaawansowanymi średnimi kroczącymi",
                   xaxis_title="Data", yaxis_title="Skumulowana liczba zamówień",
                   template="plotly_white", legend=dict(orientation="h", y=-0.25))
 st.plotly_chart(fig, use_container_width=True)
