@@ -53,15 +53,21 @@ st.dataframe(ts.tail().rename('orders'))
 # === Modelowanie ===
 st.subheader("🤖 Model prognozujący")
 
-# Bierzemy tylko do końca 2024
 train = ts[ts.index < '2025-01-01']
-
 if len(train) < 3:
     st.error("Za mało danych do modelowania (potrzeba przynajmniej kilku miesięcy historii).")
     st.stop()
 
-# Exponential Smoothing z sezonowością
-model = ExponentialSmoothing(train, trend='add', seasonal='add', seasonal_periods=seasonal_periods)
+# --- AUTOMATYCZNY DOBÓR SEZONOWOŚCI ---
+if len(train) < 2 * seasonal_periods:
+    st.warning(
+        f"⚠️ Za mało danych na pełną sezonowość ({len(train)} punktów, potrzeba {2 * seasonal_periods}). "
+        "Model użyje tylko trendu bez komponentu sezonowego."
+    )
+    model = ExponentialSmoothing(train, trend='add', seasonal=None)
+else:
+    model = ExponentialSmoothing(train, trend='add', seasonal='add', seasonal_periods=seasonal_periods)
+
 fit = model.fit(optimized=True)
 
 # === Prognoza tylko na 2025 ===
@@ -72,11 +78,18 @@ forecast.index = forecast_index
 # === Metryki wzrostów ===
 df_forecast = forecast.to_frame('forecast')
 df_forecast['dod'] = df_forecast['forecast'].pct_change() * 100
-df_forecast['wow'] = df_forecast['forecast'].pct_change(7) * 100 if agg_type == 'Dzienna' else np.nan
-df_forecast['mom'] = df_forecast['forecast'].pct_change(1) * 100 if agg_type == 'Miesięczna' else np.nan
+if agg_type == 'Dzienna':
+    df_forecast['wow'] = df_forecast['forecast'].pct_change(7) * 100
+    df_forecast['mom'] = np.nan
+elif agg_type == 'Tygodniowa':
+    df_forecast['wow'] = df_forecast['forecast'].pct_change() * 100
+    df_forecast['mom'] = np.nan
+else:
+    df_forecast['wow'] = np.nan
+    df_forecast['mom'] = df_forecast['forecast'].pct_change() * 100
 
 # Średnie wzrosty
-mean_dod = df_forecast['dod'].mean()
+mean_dod = df_forecast['dod'].mean(skipna=True)
 mean_mom = df_forecast['mom'].mean(skipna=True)
 mean_wow = df_forecast['wow'].mean(skipna=True)
 total_2025 = df_forecast['forecast'].sum()
