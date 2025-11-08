@@ -5,19 +5,8 @@ import numpy as np
 from datetime import datetime
 import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from statsmodels.tsa.arima.model import ARIMA
 import holidays
-
-# Prophet
-try:
-    from prophet import Prophet
-except Exception:
-    Prophet = None
-
-# pmdarima
-try:
-    import pmdarima as pm
-except Exception:
-    pm = None
 
 st.set_page_config(page_title="Forecast Orders A+", layout="wide")
 st.title("Forecast Orders")
@@ -33,7 +22,7 @@ rolling_window_days = st.sidebar.number_input("Długość okna walidacji (dni) d
 max_folds = st.sidebar.number_input("Liczba foldów rolling CV", min_value=1, max_value=6, value=3)
 
 if uploaded_file is None:
-    st.info("Prześlij plik z kolumnami: data (date) i orders (ile zamówień).")
+    st.info("Prześlij plik z kolumnami: date i orders")
     st.stop()
 
 # Wczytanie danych
@@ -90,41 +79,24 @@ def rmse(a,f): return np.sqrt(np.mean((np.array(a)-np.array(f))**2))
 def mae(a,f): return np.mean(np.abs(np.array(a)-np.array(f)))
 
 # Forecast functions
-def fit_prophet(train, periods, holidays_df=None, freq='D'):
-    if Prophet is None:
-        raise ImportError("Prophet nie zainstalowany")
-    dfp = train.reset_index().rename(columns={'date':'ds','orders':'y'})
-    m = Prophet(yearly_seasonality=False, weekly_seasonality=True, daily_seasonality=False)
-    if holidays_df is not None:
-        m.add_country_holidays(country_name='PL')
-    m.fit(dfp)
-    future = m.make_future_dataframe(periods=periods, freq=freq)
-    fcst = m.predict(future)
-    pred = fcst.set_index('ds')['yhat'].iloc[-periods:]
-    return pred
-
-def fit_auto_arima_forecast(train, periods, freq='D'):
-    if pm is None:
-        raise ImportError("pmdarima nie zainstalowane")
-    y = train.values
-    seasonal, m = (len(y)>14, 7) if freq=='D' else (len(y)>24, 12) if freq=='M' else (len(y)>14, 52)
-    arima = pm.auto_arima(y, seasonal=seasonal, m=m, stepwise=True, suppress_warnings=True, error_action='ignore')
-    preds = arima.predict(n_periods=periods)
+def fit_ets_forecast(train, periods, seasonal_periods=None, freq='D'):
+    sp = seasonal_periods or (7 if freq=='D' else 12 if freq=='M' else 52)
+    st_model = ExponentialSmoothing(train.fillna(0), trend='add', seasonal='add' if len(train)>2*sp else None, seasonal_periods=sp if len(train)>2*sp else None)
+    fit = st_model.fit()
+    preds = fit.forecast(periods)
     last = train.index[-1]
     idx = pd.date_range(start=last + pd.Timedelta(1, unit=freq), periods=periods, freq=freq)
-    return pd.Series(preds, index=idx)
+    preds.index = idx
+    return preds
 
-def fit_ets_forecast(train, periods, seasonal_periods=None, freq='D'):
-    try:
-        sp = seasonal_periods or (7 if freq=='D' else 12 if freq=='M' else 52)
-        st_model = ExponentialSmoothing(train.fillna(0), trend='add', seasonal='add' if len(train)>2*sp else None, seasonal_periods=sp if len(train)>2*sp else None)
-        fit = st_model.fit()
-        preds = fit.forecast(periods)
-        last = train.index[-1]
-        idx = pd.date_range(start=last + pd.Timedelta(1, unit=freq), periods=periods, freq=freq)
-        preds.index = idx
-        return preds
-    except: return pd.Series([np.nan]*periods)
+def fit_arima_forecast(train, periods, order=(1,1,1), freq='D'):
+    model = ARIMA(train, order=order)
+    fit = model.fit()
+    preds = fit.forecast(periods)
+    last = train.index[-1]
+    idx = pd.date_range(start=last + pd.Timedelta(1, unit=freq), periods=periods, freq=freq)
+    preds.index = idx
+    return preds
 
 # Rolling CV
 st.subheader('Rolling cross-validation')
@@ -134,20 +106,17 @@ min_train = max(30,h)
 starts = [n - (max_folds-i)*h for i in range(max_folds) if n - (max_folds-i)*h > min_train] or [n-h-1]
 st.write(f'Uruchamiam rolling CV z {len(starts)} foldami, każdy horizon = {h} punktów')
 
-all_metrics = {'prophet':[], 'arima':[], 'ets':[]}
+all_metrics = {'arima':[], 'ets':[]}
 for idx, train_end in enumerate(starts):
     train = ts.iloc[:train_end]
     test = ts.iloc[train_end:train_end+h]
     if len(test)==0: continue
     st.write(f'Fold {idx+1}: trening do {train.index.max().date()}, test od {test.index.min().date()} ({len(test)} punktów)')
-    # Prophet
-    try: p_pred = fit_prophet(train, periods=len(test), holidays_df=holidays_df, freq='D'); all_metrics['prophet'].append((mape(test,p_pred), rmse(test,p_pred), mae(test,p_pred)))
-    except: all_metrics['prophet'].append((np.nan,np.nan,np.nan))
     # ARIMA
-    try: a_pred = fit_auto_arima_forecast(train, periods=len(test), freq='D'); all_metrics['arima'].append((mape(test,a_pred), rmse(test,a_pred), mae(test,a_pred)))
+    try: a_pred = fit_arima_forecast(train, periods=len(test)); all_metrics['arima'].append((mape(test,a_pred), rmse(test,a_pred), mae(test,a_pred)))
     except: all_metrics['arima'].append((np.nan,np.nan,np.nan))
     # ETS
-    try: e_pred = fit_ets_forecast(train, periods=len(test), freq='D'); all_metrics['ets'].append((mape(test,e_pred), rmse(test,e_pred), mae(test,e_pred)))
+    try: e_pred = fit_ets_forecast(train, periods=len(test)); all_metrics['ets'].append((mape(test,e_pred), rmse(test,e_pred), mae(test,e_pred)))
     except: all_metrics['ets'].append((np.nan,np.nan,np.nan))
 
 summary = {m:(np.nanmean([x[0] for x in vals]), np.nanmean([x[1] for x in vals]), np.nanmean([x[2] for x in vals])) for m,vals in all_metrics.items()}
@@ -165,9 +134,8 @@ last = ts.index.max()
 end_date = pd.to_datetime(forecast_until)
 periods = (end_date - last).days if freq=='Dzienna' else ((end_date - last).days)//7+1 if freq=='Tygodniowa' else (end_date.year - last.year)*12 + (end_date.month - last.month)
 if periods>0:
-    if best_model=='prophet': final_pred = fit_prophet(ts, periods, holidays_df, 'D')
-    elif best_model=='arima': final_pred = fit_auto_arima_forecast(ts, periods, 'D')
-    else: final_pred = fit_ets_forecast(ts, periods, freq='D')
+    if best_model=='arima': final_pred = fit_arima_forecast(ts, periods)
+    else: final_pred = fit_ets_forecast(ts, periods)
     full = pd.concat([ts, final_pred])
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ts.index, y=ts.values, mode='lines', name='History'))
