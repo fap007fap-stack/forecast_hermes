@@ -7,7 +7,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import holidays
 
 st.set_page_config(page_title="📈 Forecast Orders – Advanced Daily Model", layout="wide")
-st.title("Prognoza Hermes")
+st.title("Prognoza Hermes – dzienna i skumulowana")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
@@ -58,6 +58,9 @@ yoy_growth = ((curr_year_sum - prev_year_sum)/prev_year_sum*100) if prev_year_su
 
 # === Forecast ===
 forecast_horizon = (datetime(2025,12,31) - ts.index.max()).days
+pl_holidays = holidays.Poland(years=[2024, 2025])
+weekends = ts.index[ts.index.weekday >= 5]
+
 try:
     model = ExponentialSmoothing(ts, trend='add', seasonal='add', seasonal_periods=season_input)
     fit = model.fit(optimized=True)
@@ -69,19 +72,16 @@ try:
     forecast_cum_opt = forecast_cum * (1 + opt_change/100)
     forecast_cum_pess = forecast_cum * (1 - opt_change/100)
 
-    # === Prognoza dzienna skalowana do zakładanego wzrostu R/R ===
+    # Prognoza dzienna skalowana do założonego wzrostu R/R
     forecast_daily_scaled = forecast * (r2r_multiplier * prev_year_sum / forecast.sum())
     forecast_daily_opt = forecast_daily_scaled * (1 + opt_change/100)
     forecast_daily_pess = forecast_daily_scaled * (1 - opt_change/100)
 
-    # === Obsługa dni wolnych i weekendów ===
-    pl_holidays = holidays.Poland(years=[2024, 2025])
-    weekends = forecast_daily_scaled.index[forecast_daily_scaled.index.weekday >= 5]
-
+    # Filtrowanie dni wolnych i weekendów dla prognozy dziennej
     if not include_weekends:
-        forecast_daily_scaled = forecast_daily_scaled[~forecast_daily_scaled.index.isin(weekends)]
-        forecast_daily_opt = forecast_daily_opt[~forecast_daily_opt.index.isin(weekends)]
-        forecast_daily_pess = forecast_daily_pess[~forecast_daily_pess.index.isin(weekends)]
+        forecast_daily_scaled = forecast_daily_scaled[forecast_daily_scaled.index.weekday < 5]
+        forecast_daily_opt = forecast_daily_opt[forecast_daily_opt.index.weekday < 5]
+        forecast_daily_pess = forecast_daily_pess[forecast_daily_pess.index.weekday < 5]
 
     if not include_holidays:
         forecast_daily_scaled = forecast_daily_scaled[~forecast_daily_scaled.index.isin(pl_holidays)]
@@ -117,15 +117,30 @@ col1.metric("Prognoza całkowita 2025", f"{forecast_cum.iloc[-1]:,.0f}")
 col2.metric("Wzrost YoY (rok do roku)", f"{yoy_growth:.2f}%" if not np.isnan(yoy_growth) else "Brak danych")
 col3.metric("Średni dzienny wzrost", f"{ts.diff().mean():,.2f}")
 
-# === Wykres dziennej prognozy (bez kumulacji) z założonym wzrostem R/R i dniami wolnymi ===
+# === Wykres dziennej prognozy (z historią i prognozą dzienną) ===
 fig_daily = go.Figure()
+
+# Historyczne dane dzienne (filtr weekendów/świąt)
+ts_workdays = ts.copy()
+if not include_weekends:
+    ts_workdays = ts_workdays[ts_workdays.index.weekday < 5]
+if not include_holidays:
+    ts_workdays = ts_workdays[~ts_workdays.index.isin(pl_holidays)]
+
+fig_daily.add_trace(go.Scatter(x=ts_workdays.index, y=ts_workdays.values, mode='lines+markers', name='Historyczne'))
+
+# Prognozy dzienne
 fig_daily.add_trace(go.Scatter(x=forecast_daily_scaled.index, y=forecast_daily_scaled.values, mode='lines+markers', name='Prognoza dzienna'))
 fig_daily.add_trace(go.Scatter(x=forecast_daily_opt.index, y=forecast_daily_opt.values, mode='lines', name='Optymistyczny'))
 fig_daily.add_trace(go.Scatter(x=forecast_daily_pess.index, y=forecast_daily_pess.values, mode='lines', name='Pesymistyczny'))
 
-fig_daily.update_layout(title=f"Prognoza dzienna zamówień (skalowana do R/R={r2r_multiplier})",
-                        xaxis_title="Data", yaxis_title="Liczba zamówień",
-                        template="plotly_white", legend=dict(orientation="h", y=-0.25))
+fig_daily.update_layout(
+    title=f"Prognoza dzienna zamówień (skalowana do R/R={r2r_multiplier}) z danymi historycznymi",
+    xaxis_title="Data", 
+    yaxis_title="Liczba zamówień",
+    template="plotly_white", 
+    legend=dict(orientation="h", y=-0.25)
+)
 st.plotly_chart(fig_daily, use_container_width=True)
 
 # === Pobranie prognozy skumulowanej ===
