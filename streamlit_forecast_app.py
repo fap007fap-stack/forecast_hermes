@@ -6,7 +6,7 @@ import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 st.set_page_config(page_title="📈 Forecast Orders – Advanced Daily Model", layout="wide")
-st.title("🛒 Prognoza dzienna zamówień eCommerce z średnimi kroczącymi i dzienną prognozą")
+st.title("🛒 Prognoza dzienna zamówień eCommerce z możliwością ustawienia wzrostu rok do roku")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
@@ -28,6 +28,7 @@ val_col = st.sidebar.selectbox("Kolumna z wartością", [c for c in df.columns i
 ma_window = st.sidebar.slider("Średnia krocząca (dni)", 3, 30, 7)
 season_input = st.sidebar.number_input("Okres sezonowości (dni)", min_value=2, max_value=730, value=365)
 opt_change = st.sidebar.slider("Zmiana dla scenariuszy [%]", -50, 50, 10)
+r2r_multiplier = st.sidebar.number_input("Założony wzrost rok do roku (np. 2.4)", min_value=0.1, value=2.4, step=0.1)
 
 # === Przygotowanie danych ===
 data = df[[date_col, val_col]].copy()
@@ -40,7 +41,7 @@ data['orders'] = pd.to_numeric(data['orders'], errors='coerce').fillna(0)
 ts = data.set_index('date')['orders'].resample('D').sum()
 ts_cum = ts.cumsum()
 
-# === Średnie kroczące historyczne (tylko dla danych historycznych) ===
+# === Średnie kroczące historyczne (tylko dane historyczne) ===
 ma_short = ts.rolling(7, min_periods=1).mean().cumsum()
 ma_mid = ts.rolling(30, min_periods=1).mean().cumsum()
 ma_long = ts.rolling(90, min_periods=1).mean().cumsum()
@@ -64,6 +65,11 @@ try:
     forecast_cum = pd.Series(np.cumsum(forecast.values) + ts_cum.iloc[-1], index=forecast.index)
     forecast_cum_opt = forecast_cum * (1 + opt_change/100)
     forecast_cum_pess = forecast_cum * (1 - opt_change/100)
+
+    # === Prognoza dzienna skalowana do zakładanego wzrostu R/R ===
+    forecast_daily_scaled = forecast * (r2r_multiplier * prev_year_sum / forecast.sum())
+    forecast_daily_opt = forecast_daily_scaled * (1 + opt_change/100)
+    forecast_daily_pess = forecast_daily_scaled * (1 - opt_change/100)
 
 except Exception as e:
     st.error(f"Błąd przy dopasowaniu modelu: {e}")
@@ -94,15 +100,13 @@ col1.metric("Prognoza całkowita 2025", f"{forecast_cum.iloc[-1]:,.0f}")
 col2.metric("Wzrost YoY (rok do roku)", f"{yoy_growth:.2f}%" if not np.isnan(yoy_growth) else "Brak danych")
 col3.metric("Średni dzienny wzrost", f"{ts.diff().mean():,.2f}")
 
-# === Wykres dziennej prognozy (bez kumulacji) ===
+# === Wykres dziennej prognozy (bez kumulacji) z założonym wzrostem R/R ===
 fig_daily = go.Figure()
-fig_daily.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines+markers', name='Prognoza dzienna'))
-fig_daily.add_trace(go.Scatter(x=(forecast*(1+opt_change/100)).index, y=(forecast*(1+opt_change/100)).values, 
-                               mode='lines', name='Optymistyczny'))
-fig_daily.add_trace(go.Scatter(x=(forecast*(1-opt_change/100)).index, y=(forecast*(1-opt_change/100)).values, 
-                               mode='lines', name='Pesymistyczny'))
+fig_daily.add_trace(go.Scatter(x=forecast_daily_scaled.index, y=forecast_daily_scaled.values, mode='lines+markers', name='Prognoza dzienna'))
+fig_daily.add_trace(go.Scatter(x=forecast_daily_opt.index, y=forecast_daily_opt.values, mode='lines', name='Optymistyczny'))
+fig_daily.add_trace(go.Scatter(x=forecast_daily_pess.index, y=forecast_daily_pess.values, mode='lines', name='Pesymistyczny'))
 
-fig_daily.update_layout(title="Prognoza dzienna zamówień (bez kumulacji)",
+fig_daily.update_layout(title=f"Prognoza dzienna zamówień (skalowana do R/R={r2r_multiplier})",
                         xaxis_title="Data", yaxis_title="Liczba zamówień",
                         template="plotly_white", legend=dict(orientation="h", y=-0.25))
 st.plotly_chart(fig_daily, use_container_width=True)
