@@ -38,8 +38,8 @@ except Exception:
     pm = None
 
 st.set_page_config(page_title="Forecast Orders A+", layout="wide")
-st.title("Forecast Orders — Prophet + auto_arima + ETS (A+)")
-st.markdown("Aplikacja przygotowana pod dane od czerwca 2024 do listopada 2025. Wybierz plik CSV/XLSX i ustaw parametry.")
+st.title("Forecast Orders")
+st.markdown("Wybierz plik CSV/XLSX i ustaw parametry.")
 
 # Sidebar
 st.sidebar.header("Ustawienia")
