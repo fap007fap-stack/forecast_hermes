@@ -1,12 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import holidays
 
 st.set_page_config(page_title="📈 Forecast Orders – Advanced Daily Model", layout="wide")
-st.title("🛒 Prognoza dzienna zamówień eCommerce z możliwością ustawienia wzrostu rok do roku")
+st.title("🛒 Prognoza dzienna zamówień eCommerce z uwzględnieniem dni wolnych i wzrostu rok do roku")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
@@ -29,6 +30,8 @@ ma_window = st.sidebar.slider("Średnia krocząca (dni)", 3, 30, 7)
 season_input = st.sidebar.number_input("Okres sezonowości (dni)", min_value=2, max_value=730, value=365)
 opt_change = st.sidebar.slider("Zmiana dla scenariuszy [%]", -50, 50, 10)
 r2r_multiplier = st.sidebar.number_input("Założony wzrost rok do roku (np. 2.4)", min_value=0.1, value=2.4, step=0.1)
+include_weekends = st.sidebar.checkbox("Uwzględnij weekendy w prognozie dziennej", value=False)
+include_holidays = st.sidebar.checkbox("Uwzględnij święta w prognozie dziennej", value=False)
 
 # === Przygotowanie danych ===
 data = df[[date_col, val_col]].copy()
@@ -71,6 +74,20 @@ try:
     forecast_daily_opt = forecast_daily_scaled * (1 + opt_change/100)
     forecast_daily_pess = forecast_daily_scaled * (1 - opt_change/100)
 
+    # === Obsługa dni wolnych i weekendów ===
+    pl_holidays = holidays.Poland(years=[2024, 2025])
+    weekends = forecast_daily_scaled.index[forecast_daily_scaled.index.weekday >= 5]
+
+    if not include_weekends:
+        forecast_daily_scaled = forecast_daily_scaled[~forecast_daily_scaled.index.isin(weekends)]
+        forecast_daily_opt = forecast_daily_opt[~forecast_daily_opt.index.isin(weekends)]
+        forecast_daily_pess = forecast_daily_pess[~forecast_daily_pess.index.isin(weekends)]
+
+    if not include_holidays:
+        forecast_daily_scaled = forecast_daily_scaled[~forecast_daily_scaled.index.isin(pl_holidays)]
+        forecast_daily_opt = forecast_daily_opt[~forecast_daily_opt.index.isin(pl_holidays)]
+        forecast_daily_pess = forecast_daily_pess[~forecast_daily_pess.index.isin(pl_holidays)]
+
 except Exception as e:
     st.error(f"Błąd przy dopasowaniu modelu: {e}")
     st.stop()
@@ -100,7 +117,7 @@ col1.metric("Prognoza całkowita 2025", f"{forecast_cum.iloc[-1]:,.0f}")
 col2.metric("Wzrost YoY (rok do roku)", f"{yoy_growth:.2f}%" if not np.isnan(yoy_growth) else "Brak danych")
 col3.metric("Średni dzienny wzrost", f"{ts.diff().mean():,.2f}")
 
-# === Wykres dziennej prognozy (bez kumulacji) z założonym wzrostem R/R ===
+# === Wykres dziennej prognozy (bez kumulacji) z założonym wzrostem R/R i dniami wolnymi ===
 fig_daily = go.Figure()
 fig_daily.add_trace(go.Scatter(x=forecast_daily_scaled.index, y=forecast_daily_scaled.values, mode='lines+markers', name='Prognoza dzienna'))
 fig_daily.add_trace(go.Scatter(x=forecast_daily_opt.index, y=forecast_daily_opt.values, mode='lines', name='Optymistyczny'))
