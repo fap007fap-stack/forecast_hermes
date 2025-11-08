@@ -5,10 +5,9 @@ from datetime import datetime
 import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.seasonal import seasonal_decompose
-import holidays
 
-st.set_page_config(page_title="📈 Forecast Orders – Advanced Seasonal Model", layout="wide")
-st.title("🛒 Prognoza zamówień eCommerce (z sezonowością roczną i świąteczną)")
+st.set_page_config(page_title="📈 Forecast Orders – Smart Seasonal Model", layout="wide")
+st.title("🛒 Prognoza zamówień eCommerce (automatyczna sezonowość)")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
@@ -40,29 +39,38 @@ data['orders'] = pd.to_numeric(data['orders'], errors='coerce').fillna(0)
 if freq == 'Dzienna':
     ts = data.set_index('date')['orders'].resample('D').sum()
     freq_rule = 'D'
-    seasonal_periods = 365
 else:
     ts = data.set_index('date')['orders'].resample('W-MON').sum()
     freq_rule = 'W'
-    seasonal_periods = 52
 
 ts_cum = ts.cumsum()
 
 st.subheader("📅 Zakres danych")
 st.write(f"Od **{ts_cum.index.min().date()}** do **{ts_cum.index.max().date()}**, liczba punktów: **{len(ts_cum)}**")
 
-# === Dekompzycja sezonowości ===
+# === Automatyczne dobranie sezonowości ===
+if len(ts_cum) >= 730:
+    seasonal_periods = 365   # pełny roczny cykl
+    season_label = "roczna (365 dni)"
+elif len(ts_cum) >= 100:
+    seasonal_periods = 30    # miesięczny cykl
+    season_label = "miesięczna (30 dni)"
+else:
+    seasonal_periods = 7     # tygodniowy cykl
+    season_label = "tygodniowa (7 dni)"
+
+# === Dekompzycja sezonowości (jeśli możliwa) ===
 with st.expander("🔍 Analiza sezonowości"):
     try:
         result = seasonal_decompose(ts, model='additive', period=seasonal_periods)
         fig_dec = go.Figure()
         fig_dec.add_trace(go.Scatter(x=result.seasonal.index, y=result.seasonal.values, mode='lines', name='Sezonowość'))
-        fig_dec.update_layout(title="Komponent sezonowy (średni roczny wzorzec)")
+        fig_dec.update_layout(title=f"Komponent sezonowy ({season_label})")
         st.plotly_chart(fig_dec, use_container_width=True)
     except Exception as e:
-        st.warning(f"Nie udało się przeprowadzić dekompozycji sezonowości: {e}")
+        st.warning(f"Nie udało się przeprowadzić pełnej dekompozycji: {e}")
 
-# === Model z roczną sezonowością ===
+# === Model z dopasowaną sezonowością ===
 st.subheader("📈 Modelowanie prognozy")
 try:
     model = ExponentialSmoothing(ts_cum, trend='add', seasonal='add', seasonal_periods=seasonal_periods)
@@ -87,10 +95,10 @@ yoy_growth = ((forecast_2025 - hist_2024) / hist_2024 * 100) if not np.isnan(his
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=ts_cum.index, y=ts_cum.values, mode='lines', name='📘 Historyczne (kumulowane)'))
 fig.add_trace(go.Scatter(x=ma.index, y=ma.values, mode='lines', name=f'Średnia krocząca ({ma_window})'))
-fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines', name='🔮 Prognoza 2025 (z roczną sezonowością)'))
+fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines', name=f'🔮 Prognoza ({season_label})'))
 
 fig.update_layout(
-    title="Prognoza skumulowanych zamówień z roczną sezonowością (e-commerce)",
+    title=f"Prognoza skumulowanych zamówień z sezonowością: {season_label}",
     xaxis_title="Data",
     yaxis_title="Skumulowana liczba zamówień",
     template="plotly_white",
@@ -104,11 +112,11 @@ col1, col2, col3, col4 = st.columns(4)
 col1.metric("Prognoza na koniec 2025", f"{forecast_2025:,.0f}")
 col2.metric("Wzrost YoY (2025 vs 2024)", f"{yoy_growth:.2f}%" if not np.isnan(yoy_growth) else "Brak danych 2024")
 col3.metric("Średni dzienny wzrost", f"{ts_cum.diff().mean():,.2f}")
-col4.metric("Okno MA", f"{ma_window} dni")
+col4.metric("Typ sezonowości", season_label)
 
 st.markdown("### 📅 Dodatkowe dane sezonowe")
-st.write(f"- Model uwzględnia **roczny cykl 365 dni**, co pozwala przewidzieć wzrost w okresie świątecznym 🎅")
-st.write(f"- Wykryto trend: **{fit.params['smoothing_trend']:.4f}**, wzmocnienie sezonowości: **{fit.params['smoothing_seasonal']:.4f}**")
+st.write(f"- Model automatycznie dobrał cykl **{season_label}**, bazując na długości danych.")
+st.write(f"- Okno średniej kroczącej: **{ma_window} dni**")
 st.write(f"- Prognoza obejmuje okres: **{last_date.date()} → 2025-12-31**")
 
-st.download_button("📥 Pobierz prognozę (CSV)", forecast.rename('forecast').to_csv().encode(), file_name="forecast_2025_seasonal.csv")
+st.download_button("📥 Pobierz prognozę (CSV)", forecast.rename('forecast').to_csv().encode(), file_name="forecast_2025_auto_season.csv")
