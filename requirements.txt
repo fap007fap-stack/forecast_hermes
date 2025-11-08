@@ -1,6 +1,6 @@
-streamlit>=1.24
-pandas>=2.0
-numpy>=1.23
-plotly>=5.15
-statsmodels>=0.14.5
-holidays>=0.26
+pandas
+openpyxl
+statsmodels
+holidays
+plotly
+streamlit
