@@ -6,7 +6,7 @@ import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 st.set_page_config(page_title="📈 Forecast Orders – Daily Scenarios", layout="wide")
-st.title("🛒 Prognoza dzienna zamówień eCommerce z opcjami scenariuszy i sezonowości")
+st.title("Prognoza dzienna Hermes ")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
