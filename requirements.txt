@@ -1,0 +1,10 @@
+streamlit
+prophet
+pmdarima
+statsmodels
+holidays
+plotly
+pandas
+numpy
+matplotlib
+openpyxl
