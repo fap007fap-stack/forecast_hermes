@@ -40,7 +40,7 @@ data['orders'] = pd.to_numeric(data['orders'], errors='coerce').fillna(0)
 ts = data.set_index('date')['orders'].resample('D').sum()
 ts_cum = ts.cumsum()
 
-# === Dane historyczne do średnich kroczących ===
+# === Średnie kroczące historyczne ===
 ma_short = ts.rolling(7, min_periods=1).mean().cumsum()
 ma_mid = ts.rolling(30, min_periods=1).mean().cumsum()
 ma_long = ts.rolling(90, min_periods=1).mean().cumsum()
@@ -65,18 +65,15 @@ try:
     forecast_cum_opt = forecast_cum * (1 + opt_change/100)
     forecast_cum_pess = forecast_cum * (1 - opt_change/100)
 
-    # Średnie kroczące na prognozę
-    ma_short_forecast = pd.concat([ma_short, forecast_cum.rolling(7, min_periods=1).mean()]).iloc[-forecast_horizon:]
-    ma_mid_forecast = pd.concat([ma_mid, forecast_cum.rolling(30, min_periods=1).mean()]).iloc[-forecast_horizon:]
-    ma_long_forecast = pd.concat([ma_long, forecast_cum.rolling(90, min_periods=1).mean()]).iloc[-forecast_horizon:]
-    ema_30_forecast = pd.concat([ema_30, forecast_cum.ewm(span=30, adjust=False).mean()]).iloc[-forecast_horizon:]
+    # Średnie kroczące + forecast (poprawnie łączone)
+    ma_short_full = pd.concat([ma_short, forecast_cum.rolling(7, min_periods=1).mean()])
+    ma_mid_full = pd.concat([ma_mid, forecast_cum.rolling(30, min_periods=1).mean()])
+    ma_long_full = pd.concat([ma_long, forecast_cum.rolling(90, min_periods=1).mean()])
+    ema_30_full = pd.concat([ema_30, forecast_cum.ewm(span=30, adjust=False).mean()])
 
 except Exception as e:
     st.error(f"Błąd przy dopasowaniu modelu: {e}")
     st.stop()
-
-# === Skumulowane dane łącznie z forecastem ===
-full_cum = pd.concat([ts_cum, forecast_cum])
 
 # === Wizualizacja ===
 fig = go.Figure()
@@ -86,18 +83,14 @@ fig.add_trace(go.Scatter(x=forecast_cum_opt.index, y=forecast_cum_opt.values, mo
 fig.add_trace(go.Scatter(x=forecast_cum_pess.index, y=forecast_cum_pess.values, mode='lines', name='🔮 Pesymistyczny'))
 
 # === Średnie kroczące historyczne + forecast (przerywane, delikatny kolor) ===
-fig.add_trace(go.Scatter(x=pd.concat([ma_short.index, forecast_cum.index]),
-                         y=pd.concat([ma_short, ma_short_forecast]),
-                         mode='lines', name='MA 7 dni', line=dict(dash='dot', color='lightblue')))
-fig.add_trace(go.Scatter(x=pd.concat([ma_mid.index, forecast_cum.index]),
-                         y=pd.concat([ma_mid, ma_mid_forecast]),
-                         mode='lines', name='MA 30 dni', line=dict(dash='dot', color='lightgreen')))
-fig.add_trace(go.Scatter(x=pd.concat([ma_long.index, forecast_cum.index]),
-                         y=pd.concat([ma_long, ma_long_forecast]),
-                         mode='lines', name='MA 90 dni', line=dict(dash='dot', color='lightcoral')))
-fig.add_trace(go.Scatter(x=pd.concat([ema_30.index, forecast_cum.index]),
-                         y=pd.concat([ema_30, ema_30_forecast]),
-                         mode='lines', name='EMA 30 dni', line=dict(dash='dot', color='orange')))
+fig.add_trace(go.Scatter(x=ma_short_full.index, y=ma_short_full.values, mode='lines', name='MA 7 dni',
+                         line=dict(dash='dot', color='lightblue')))
+fig.add_trace(go.Scatter(x=ma_mid_full.index, y=ma_mid_full.values, mode='lines', name='MA 30 dni',
+                         line=dict(dash='dot', color='lightgreen')))
+fig.add_trace(go.Scatter(x=ma_long_full.index, y=ma_long_full.values, mode='lines', name='MA 90 dni',
+                         line=dict(dash='dot', color='lightcoral')))
+fig.add_trace(go.Scatter(x=ema_30_full.index, y=ema_30_full.values, mode='lines', name='EMA 30 dni',
+                         line=dict(dash='dot', color='orange')))
 
 fig.update_layout(title="Skumulowana prognoza dzienna zamówień z zaawansowanymi średnimi kroczącymi",
                   xaxis_title="Data", yaxis_title="Skumulowana liczba zamówień",
