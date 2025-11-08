@@ -114,7 +114,7 @@ col2.metric("Wzrost YoY (rok do roku)", f"{yoy_growth:.2f}%" if not np.isnan(yoy
 col3.metric("Średni dzienny wzrost", f"{ts.diff().mean():,.2f}")
 col4.metric("Typ sezonowości", f"{seasonal_periods} jednostek")
 
-# === Dodatkowe wzrosty względem poprzedniego roku ===
+# === Dodatkowe wykresy YoY ===
 st.markdown("### 📈 Wzrosty YoY")
 if daily_yoy is not None:
     st.write("Dzienny YoY (różnica z tym samym dniem w poprzednim roku)")
@@ -125,6 +125,31 @@ if weekly_yoy is not None:
 if monthly_yoy is not None:
     st.write("Miesięczny YoY")
     st.line_chart(monthly_yoy.fillna(0))
+
+# === Dynamiczne wskaźniki procentowe w tabeli ===
+st.markdown("### 📊 Wzrosty względem poprzedniego okresu")
+
+daily_change = ts.pct_change() * 100
+weekly = ts.resample('W-MON').sum()
+weekly_change = weekly.pct_change() * 100
+monthly = ts.resample('MS').sum()
+monthly_change = monthly.pct_change() * 100
+
+# YoY dzienny
+if len(ts) > 365:
+    yoy_daily = ts.diff(365) / ts.shift(365) * 100
+else:
+    yoy_daily = pd.Series(dtype=float)
+
+# Tworzymy DataFrame
+growth_df = pd.DataFrame({
+    'Dzienny [%]': daily_change.fillna(0),
+    'Tygodniowy [%]': weekly_change.reindex(daily_change.index, method='ffill').fillna(0),
+    'Miesięczny [%]': monthly_change.reindex(daily_change.index, method='ffill').fillna(0),
+    'YoY Dzienny [%]': yoy_daily.reindex(daily_change.index, method='ffill').fillna(0)
+})
+
+st.dataframe(growth_df.style.format("{:.2f}"))
 
 # === Pobranie prognozy ===
 st.download_button("📥 Pobierz prognozę (CSV)", forecast_cum.rename('forecast').to_csv().encode(), file_name="forecast_2025_cumulative.csv")
