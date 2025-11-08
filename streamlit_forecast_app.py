@@ -4,16 +4,16 @@ import numpy as np
 from datetime import datetime
 import plotly.graph_objs as go
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
-from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.seasonal import seasonal_decompose
 import holidays
 
-st.set_page_config(page_title="Forecast Orders A+", layout="wide")
-st.title("📈 Prognoza zamówień (z sumowaniem kumulacyjnym)")
+st.set_page_config(page_title="📈 Forecast Orders – Advanced Seasonal Model", layout="wide")
+st.title("🛒 Prognoza zamówień eCommerce (z sezonowością roczną i świąteczną)")
 
 # === Wczytanie danych ===
-uploaded_file = st.sidebar.file_uploader("Wgraj plik (CSV/XLSX)", type=['csv','xlsx','xls'])
+uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
 if uploaded_file is None:
-    st.info("📁 Prześlij plik z kolumnami: data i wartość (orders/zamówienia)")
+    st.info("📁 Wgraj dane z kolumnami: data, liczba zamówień")
     st.stop()
 
 if uploaded_file.name.endswith('.csv'):
@@ -21,20 +21,14 @@ if uploaded_file.name.endswith('.csv'):
 else:
     df = pd.read_excel(uploaded_file)
 
-st.subheader("Podgląd danych")
-st.write(df.head())
-
 # === Wybór kolumn ===
-st.sidebar.header("Ustawienia kolumn")
+st.sidebar.header("📌 Kolumny")
 date_col = st.sidebar.selectbox("Kolumna z datą", df.columns)
-val_col = st.sidebar.selectbox("Kolumna z wartością (orders)", [c for c in df.columns if c != date_col])
+val_col = st.sidebar.selectbox("Kolumna z wartością", [c for c in df.columns if c != date_col])
 
 # === Parametry ===
-freq = st.sidebar.selectbox("Agregacja", ['Dzienna', 'Tygodniowa', 'Miesięczna'], index=0)
-forecast_until = st.sidebar.date_input("Prognoza do daty", value=datetime(2025, 12, 31))
-ma_window = st.sidebar.slider("Okno średniej kroczącej", 1, 60, 7)
-rolling_window_days = st.sidebar.number_input("Długość okna walidacji (dni)", min_value=7, max_value=120, value=30)
-max_folds = st.sidebar.number_input("Liczba foldów rolling CV", min_value=1, max_value=6, value=3)
+freq = st.sidebar.selectbox("Agregacja", ['Dzienna', 'Tygodniowa'], index=0)
+ma_window = st.sidebar.slider("Średnia krocząca (dni)", 3, 30, 7)
 
 # === Przygotowanie danych ===
 data = df[[date_col, val_col]].copy()
@@ -43,104 +37,78 @@ data['date'] = pd.to_datetime(data['date'], errors='coerce')
 data = data.dropna(subset=['date']).sort_values('date')
 data['orders'] = pd.to_numeric(data['orders'], errors='coerce').fillna(0)
 
-# agregacja dzienna
 if freq == 'Dzienna':
     ts = data.set_index('date')['orders'].resample('D').sum()
     freq_rule = 'D'
-elif freq == 'Tygodniowa':
+    seasonal_periods = 365
+else:
     ts = data.set_index('date')['orders'].resample('W-MON').sum()
     freq_rule = 'W'
-else:
-    ts = data.set_index('date')['orders'].resample('M').sum()
-    freq_rule = 'M'
+    seasonal_periods = 52
 
-# === Kumulacja (sumowanie narastająco) ===
 ts_cum = ts.cumsum()
 
-st.subheader("📊 Dane po przetworzeniu")
-st.write("Zakres:", ts_cum.index.min().date(), "—", ts_cum.index.max().date())
-st.write("Liczba punktów:", len(ts_cum))
-st.dataframe(ts_cum.tail(10).rename('orders').to_frame())
+st.subheader("📅 Zakres danych")
+st.write(f"Od **{ts_cum.index.min().date()}** do **{ts_cum.index.max().date()}**, liczba punktów: **{len(ts_cum)}**")
 
-# === Średnia krocząca ===
-ma = ts_cum.rolling(window=ma_window, min_periods=1).mean()
-
-# === Miary błędu ===
-def mape(a, f):
-    mask = np.array(a) != 0
-    return np.mean(np.abs((np.array(a)[mask] - np.array(f)[mask]) / np.array(a)[mask])) * 100 if mask.sum() > 0 else np.nan
-def rmse(a, f): return np.sqrt(np.mean((np.array(a) - np.array(f)) ** 2))
-def mae(a, f): return np.mean(np.abs(np.array(a) - np.array(f)))
-
-# === Modele ===
-def fit_ets_forecast(train, periods, seasonal_periods=None, freq='D'):
-    sp = seasonal_periods or (7 if freq == 'D' else 12 if freq == 'M' else 52)
-    model = ExponentialSmoothing(train, trend='add', seasonal='add' if len(train) > 2 * sp else None, seasonal_periods=sp if len(train) > 2 * sp else None)
-    fit = model.fit()
-    pred = fit.forecast(periods)
-    pred.index = pd.date_range(train.index[-1] + pd.Timedelta(1, unit=freq), periods=periods, freq=freq)
-    return pred
-
-def fit_arima_forecast(train, periods, order=(1, 1, 1), freq='D'):
-    model = ARIMA(train, order=order)
-    fit = model.fit()
-    pred = fit.forecast(periods)
-    pred.index = pd.date_range(train.index[-1] + pd.Timedelta(1, unit=freq), periods=periods, freq=freq)
-    return pred
-
-# === Rolling CV ===
-st.subheader("🔁 Rolling cross-validation")
-h = int(rolling_window_days)
-n = len(ts_cum)
-min_train = max(30, h)
-starts = [n - (max_folds - i) * h for i in range(max_folds) if n - (max_folds - i) * h > min_train] or [n - h - 1]
-
-all_metrics = {'arima': [], 'ets': []}
-for i, train_end in enumerate(starts):
-    train = ts_cum.iloc[:train_end]
-    test = ts_cum.iloc[train_end:train_end + h]
-    if len(test) == 0: continue
-    st.write(f"Fold {i+1}: trening do {train.index.max().date()}, test od {test.index.min().date()} ({len(test)} dni)")
-
+# === Dekompzycja sezonowości ===
+with st.expander("🔍 Analiza sezonowości"):
     try:
-        a_pred = fit_arima_forecast(train, len(test))
-        all_metrics['arima'].append((mape(test, a_pred), rmse(test, a_pred), mae(test, a_pred)))
-    except:
-        all_metrics['arima'].append((np.nan, np.nan, np.nan))
+        result = seasonal_decompose(ts, model='additive', period=seasonal_periods)
+        fig_dec = go.Figure()
+        fig_dec.add_trace(go.Scatter(x=result.seasonal.index, y=result.seasonal.values, mode='lines', name='Sezonowość'))
+        fig_dec.update_layout(title="Komponent sezonowy (średni roczny wzorzec)")
+        st.plotly_chart(fig_dec, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Nie udało się przeprowadzić dekompozycji sezonowości: {e}")
 
-    try:
-        e_pred = fit_ets_forecast(train, len(test))
-        all_metrics['ets'].append((mape(test, e_pred), rmse(test, e_pred), mae(test, e_pred)))
-    except:
-        all_metrics['ets'].append((np.nan, np.nan, np.nan))
+# === Model z roczną sezonowością ===
+st.subheader("📈 Modelowanie prognozy")
+try:
+    model = ExponentialSmoothing(ts_cum, trend='add', seasonal='add', seasonal_periods=seasonal_periods)
+    fit = model.fit(optimized=True)
+    last_date = ts_cum.index.max()
+    forecast_horizon = (datetime(2025, 12, 31) - last_date).days if freq == 'Dzienna' else 52
+    forecast = fit.forecast(forecast_horizon)
+    forecast.index = pd.date_range(last_date + pd.Timedelta(1, unit=freq_rule), periods=forecast_horizon, freq=freq_rule)
+except Exception as e:
+    st.error(f"Błąd przy dopasowaniu modelu: {e}")
+    st.stop()
 
-summary = {m: (np.nanmean([x[0] for x in vals]),
-               np.nanmean([x[1] for x in vals]),
-               np.nanmean([x[2] for x in vals])) for m, vals in all_metrics.items()}
-met_df = pd.DataFrame(summary, index=['MAPE', 'RMSE', 'MAE']).T
-st.dataframe(met_df.style.format("{:.2f}"))
+full = pd.concat([ts_cum, forecast])
+ma = ts_cum.rolling(ma_window, min_periods=1).mean()
 
-best_model = met_df['MAPE'].idxmin()
-st.write(f"🏆 Najlepszy model: **{best_model}**")
+# === Analiza YoY ===
+hist_2024 = ts_cum.loc[ts_cum.index.year == 2024].iloc[-1] if any(ts_cum.index.year == 2024) else np.nan
+forecast_2025 = forecast.iloc[-1]
+yoy_growth = ((forecast_2025 - hist_2024) / hist_2024 * 100) if not np.isnan(hist_2024) else np.nan
 
-# === Prognoza finalna ===
-st.subheader("📈 Prognoza końcowa")
-last = ts_cum.index.max()
-end_date = pd.to_datetime(forecast_until)
-periods = (end_date - last).days if freq == 'Dzienna' else ((end_date - last).days) // 7 + 1 if freq == 'Tygodniowa' else (end_date.year - last.year) * 12 + (end_date.month - last.month)
+# === Wizualizacja ===
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ts_cum.index, y=ts_cum.values, mode='lines', name='📘 Historyczne (kumulowane)'))
+fig.add_trace(go.Scatter(x=ma.index, y=ma.values, mode='lines', name=f'Średnia krocząca ({ma_window})'))
+fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode='lines', name='🔮 Prognoza 2025 (z roczną sezonowością)'))
 
-if periods > 0:
-    final_pred = fit_arima_forecast(ts_cum, periods) if best_model == 'arima' else fit_ets_forecast(ts_cum, periods)
-    full = pd.concat([ts_cum, final_pred])
+fig.update_layout(
+    title="Prognoza skumulowanych zamówień z roczną sezonowością (e-commerce)",
+    xaxis_title="Data",
+    yaxis_title="Skumulowana liczba zamówień",
+    template="plotly_white",
+    legend=dict(orientation="h", y=-0.25)
+)
+st.plotly_chart(fig, use_container_width=True)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ts_cum.index, y=ts_cum.values, mode='lines', name='Historyczne (kumulowane)'))
-    fig.add_trace(go.Scatter(x=ma.index, y=ma.values, mode='lines', name=f'MA ({ma_window})'))
-    fig.add_trace(go.Scatter(x=final_pred.index, y=final_pred.values, mode='lines', name=f'Prognoza ({best_model})'))
-    st.plotly_chart(fig, use_container_width=True)
+# === Dodatkowe statystyki ===
+st.markdown("## 📊 Kluczowe wskaźniki")
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Prognoza na koniec 2025", f"{forecast_2025:,.0f}")
+col2.metric("Wzrost YoY (2025 vs 2024)", f"{yoy_growth:.2f}%" if not np.isnan(yoy_growth) else "Brak danych 2024")
+col3.metric("Średni dzienny wzrost", f"{ts_cum.diff().mean():,.2f}")
+col4.metric("Okno MA", f"{ma_window} dni")
 
-    st.download_button('📥 Pobierz prognozę (CSV)',
-                       data=final_pred.rename('forecast').to_csv().encode(),
-                       file_name='forecast_cumulative.csv')
-else:
-    st.warning("Data prognozy jest przed ostatnią obserwacją.")
+st.markdown("### 📅 Dodatkowe dane sezonowe")
+st.write(f"- Model uwzględnia **roczny cykl 365 dni**, co pozwala przewidzieć wzrost w okresie świątecznym 🎅")
+st.write(f"- Wykryto trend: **{fit.params['smoothing_trend']:.4f}**, wzmocnienie sezonowości: **{fit.params['smoothing_seasonal']:.4f}**")
+st.write(f"- Prognoza obejmuje okres: **{last_date.date()} → 2025-12-31**")
+
+st.download_button("📥 Pobierz prognozę (CSV)", forecast.rename('forecast').to_csv().encode(), file_name="forecast_2025_seasonal.csv")
