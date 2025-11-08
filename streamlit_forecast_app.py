@@ -7,7 +7,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import holidays
 
 st.set_page_config(page_title="📈 Forecast Orders – Advanced Daily Model", layout="wide")
-st.title("🛒 Prognoza dzienna zamówień eCommerce z uwzględnieniem dni wolnych i wzrostu rok do roku")
+st.title("Prognoza Hermes")
 
 # === Wczytanie danych ===
 uploaded_file = st.sidebar.file_uploader("Wgraj dane (CSV/XLSX)", type=['csv', 'xlsx'])
@@ -29,7 +29,7 @@ val_col = st.sidebar.selectbox("Kolumna z wartością", [c for c in df.columns i
 ma_window = st.sidebar.slider("Średnia krocząca (dni)", 3, 30, 7)
 season_input = st.sidebar.number_input("Okres sezonowości (dni)", min_value=2, max_value=730, value=365)
 opt_change = st.sidebar.slider("Zmiana dla scenariuszy [%]", -50, 50, 10)
-r2r_multiplier = st.sidebar.number_input("Założony wzrost rok do roku (np. 2.4)", min_value=0.1, value=2.4, step=0.1)
+r2r_multiplier = st.sidebar.number_input("Założony wzrost rok do roku", min_value=0.1, value=2.4, step=0.1)
 include_weekends = st.sidebar.checkbox("Uwzględnij weekendy w prognozie dziennej", value=False)
 include_holidays = st.sidebar.checkbox("Uwzględnij święta w prognozie dziennej", value=False)
 
